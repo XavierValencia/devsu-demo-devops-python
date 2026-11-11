@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devsu-demo-python
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: devsu-demo-python
+  template:
+    metadata:
+      labels:
+        app: devsu-demo-python
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      initContainers:
+        - name: migrate
+          image: devsu-demo-python
+          command: ["python", "manage.py", "migrate", "--noinput"]
+          envFrom:
+            - configMapRef:
+                name: devsu-demo-config
+            - secretRef:
+                name: devsu-demo-secrets
+      containers:
+        - name: api
+          image: devsu-demo-python
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: devsu-demo-config
+            - secretRef:
+                name: devsu-demo-secrets
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false

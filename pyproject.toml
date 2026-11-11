@@ -1,0 +1,14 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["*/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F"]
+
+[tool.coverage.run]
+source = ["api", "demo"]
+omit = ["*/migrations/*", "*/tests.py", "demo/asgi.py", "demo/wsgi.py"]
+
+[tool.coverage.report]
+fail_under = 80

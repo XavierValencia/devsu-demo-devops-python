@@ -1,0 +1,16 @@
+*.log
+*.pot
+*.pyc
+__pycache__/
+
+db.sqlite3
+.env
+.coverage
+coverage.xml
+coverage.txt
+.ruff_cache/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.kubeconfig

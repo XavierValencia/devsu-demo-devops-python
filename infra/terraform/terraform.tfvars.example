@@ -1,0 +1,4 @@
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "eastus2"
+node_vm_size    = "Standard_B2s"
+node_count      = 2

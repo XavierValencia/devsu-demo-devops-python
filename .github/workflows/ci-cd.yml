@@ -1,0 +1,163 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  INGRESS_NGINX_VERSION: controller-v1.12.1
+
+jobs:
+  build-test:
+    name: Build & test
+    runs-on: ubuntu-24.04
+    env:
+      DJANGO_SECRET_KEY: ci-only
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Compile
+        run: |
+          python -m compileall -q api demo manage.py
+          python manage.py check
+
+      - name: Static analysis
+        run: |
+          ruff check .
+          bandit -r api demo -ll
+
+      - name: Unit tests and coverage
+        run: |
+          coverage run manage.py test
+          coverage report | tee coverage.txt
+          coverage xml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.txt
+            coverage.xml
+
+  docker:
+    name: Docker build & push
+    runs-on: ubuntu-24.04
+    needs: build-test
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image name
+        id: vars
+        run: echo "image=${REGISTRY}/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: docker build -t "${{ steps.vars.outputs.image }}" .
+
+      - name: Vulnerability scan
+        uses: anchore/scan-action@v6
+        with:
+          image: ${{ steps.vars.outputs.image }}
+          fail-build: true
+          severity-cutoff: critical
+          only-fixed: true
+          output-format: table
+
+      - name: Push
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+          docker push "${{ steps.vars.outputs.image }}"
+
+  deploy-kind:
+    name: Deploy to Kubernetes (kind)
+    runs-on: ubuntu-24.04
+    needs: docker
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: devsu
+          config: k8s/kind-config.yaml
+
+      - name: Install ingress-nginx
+        run: |
+          kubectl apply -f "https://raw.githubusercontent.com/kubernetes/ingress-nginx/${INGRESS_NGINX_VERSION}/deploy/static/provider/kind/deploy.yaml"
+          kubectl -n ingress-nginx wait --for=condition=ready pod -l app.kubernetes.io/component=controller --timeout=180s
+
+      - name: Load image
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+          docker pull "${{ needs.docker.outputs.image }}"
+          kind load docker-image "${{ needs.docker.outputs.image }}" --name devsu
+
+      - name: Deploy
+        run: |
+          export DJANGO_SECRET_KEY="$(openssl rand -hex 32)"
+          export POSTGRES_PASSWORD="$(openssl rand -hex 16)"
+          bash scripts/deploy.sh "${{ needs.docker.outputs.image }}"
+
+      - name: Smoke test
+        run: bash scripts/smoke-test.sh http://localhost
+
+  deploy-aks:
+    name: Deploy to AKS
+    runs-on: ubuntu-24.04
+    needs: [docker, deploy-kind]
+    if: github.event_name != 'pull_request' && vars.DEPLOY_AKS == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Kubeconfig
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          printf '%s\n' "$KUBE_CONFIG" > ~/.kube/config
+
+      - name: Install ingress-nginx
+        run: |
+          kubectl apply -f "https://raw.githubusercontent.com/kubernetes/ingress-nginx/${INGRESS_NGINX_VERSION}/deploy/static/provider/cloud/deploy.yaml"
+          kubectl -n ingress-nginx annotate service ingress-nginx-controller --overwrite \
+            service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path=/healthz
+          kubectl -n ingress-nginx wait --for=condition=ready pod -l app.kubernetes.io/component=controller --timeout=180s
+
+      - name: Deploy
+        env:
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: bash scripts/deploy.sh "${{ needs.docker.outputs.image }}"
+
+      - name: Public endpoint
+        run: |
+          for i in $(seq 1 30); do
+            IP="$(kubectl -n ingress-nginx get service ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+            [ -n "$IP" ] && break
+            sleep 10
+          done
+          echo "Endpoint: http://${IP}/api/users/" >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/smoke-test.sh "http://${IP}"
