@@ -1,11 +1,13 @@
 # Demo DevOps Python
 
+[![CI/CD](https://github.com/XavierValencia/devsu-demo-devops-python/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/XavierValencia/devsu-demo-devops-python/actions/workflows/ci-cd.yml)
+
 API REST en Django dockerizada, con pipeline CI/CD en GitHub Actions, desplegada en Kubernetes
 e infraestructura en Azure (AKS) creada con Terraform.
 
 | Ítem | Valor |
 |---|---|
-| Pipeline | `https://github.com/XavierValencia/devsu-demo-devops-python/actions` |
+| Pipeline | https://github.com/XavierValencia/devsu-demo-devops-python/actions |
 | Imagen | `ghcr.io/xaviervalencia/devsu-demo-devops-python:<commit-sha>` |
 | Endpoint público | `http://<IP-publica>/api/users/` |
 
@@ -89,6 +91,27 @@ flowchart LR
 | Deploy AKS | Despliegue en Azure (se activa con la variable `DEPLOY_AKS=true`) |
 
 Secrets de GitHub para AKS: `KUBE_CONFIG`, `DJANGO_SECRET_KEY`, `POSTGRES_PASSWORD`.
+
+### Resultado de ejecución
+
+Ejecución pública: https://github.com/XavierValencia/devsu-demo-devops-python/actions/runs/43119635259
+
+| Job | Resultado |
+|---|---|
+| Build & test | ✅ success |
+| Docker build & push | ✅ success |
+| Deploy to Kubernetes (kind) | ✅ success |
+| Deploy to AKS | ⏭️ skipped (pendiente de habilitar `DEPLOY_AKS`) |
+
+Resultados locales de las pruebas:
+
+| Paso | Resultado |
+|---|---|
+| Tests unitarios | 9 tests OK |
+| Cobertura | 98 % (mínimo 80 %) |
+| Análisis estático | ruff y bandit sin hallazgos |
+
+Capturas en [docs/evidencias](docs/evidencias).
 
 ## Kubernetes
 
